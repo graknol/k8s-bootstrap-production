@@ -1,0 +1,17 @@
+apiVersion: cert-manager.io/v1
+# ClusterIssuer vs Issuer
+# The difference is just that the ClusterIssuer can issue certificates for any namespace
+# This is just what we need, we're not THAT big ;-)
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-http01-issuer
+  namespace: cert-manager # It makes sense to put this CRD in the same namespace as cert-manager
+spec:
+  acme:
+    privateKeySecretRef:
+      name: letsencrypt
+    server: https://acme-v02.api.letsencrypt.org/directory
+    solvers:
+    - http01:
+       ingress:
+         class: kourier # We're using kourier, not istio, so specify that here
