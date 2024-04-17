@@ -56,6 +56,14 @@ Luckily for us, microk8s got us covered:
 # Enable the community add-on repository
 microk8s enable community
 
+# Enable helm
+microk8s enable helm
+
+# Tell helm where kubectl lives
+kubectl config view --raw > ~/.kube/config
+# Make sure the configuration file is only readable by you!
+chmod go-r ~/.kube/config
+
 # Install MetalLB
 # What this service does, is it assigns external IP addresses
 # to each LoadBalancer service in the cluster.
@@ -174,7 +182,30 @@ kubectl apply -f https://raw.githubusercontent.com/knative/docs/main/docs/servin
 kubectl get route autoscale-go
 
 # Open the URL in your browser and see if it works
+
+# Remove the example service
+kubectl delete configuration.serving.knative.dev/autoscale-go
+kubectl delete revision.serving.knative.dev/autoscale-go-00001
+kubectl delete route.serving.knative.dev/autoscale-go
+kubectl delete service.serving.knative.dev/autoscale-go
 ```
 
-Now, don't be like me and waste 3 hours troubleshooting this, and check that you've actually
-added the DNS record to your zone... That step must still be manually performed... 🤦
+*Now, don't be like me and waste 3 hours troubleshooting this, and check that you've actually
+added the DNS record to your zone... That step must still be manually performed... 🤦*
+
+## Installing Kafka
+
+This step will install a Kafka cluster in your Kubernetes cluster.
+
+```sh
+# First add the helm repository for Strimzi
+helm repo add strimzi https://strimzi.io/charts/
+
+# Install the strimzi operator
+helm install strimzi-operator strimzi/strimzi-kafka-operator \
+  --namespace kafka \
+  --create-namespace
+
+# TODO: Add steps to create a kafka cluster
+# Source: https://strimzi.io/quickstarts/
+```
