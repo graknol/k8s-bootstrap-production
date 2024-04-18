@@ -45,6 +45,21 @@ microk8s.status --wait-ready
 sudo snap alias microk8s.kubectl kubectl
 ```
 
+## Installing Istio
+
+For the networking layer, we'll be using Istio.
+
+```sh
+# Enable the community add-on repository
+microk8s enable community
+
+# Install Istio
+microk8s.enable istio
+
+# Alias istioctl to make it easier to use
+sudo snap alias microk8s.istioctl istioctl
+```
+
 ## Installing Knative
 
 We want to run serverless loads on our cluster. And what better way to do so than to use Knative?  
@@ -52,9 +67,6 @@ Luckily for us, microk8s got us covered:
 
 ```sh
 # Source: https://ubuntu.com/blog/getting-started-with-knative-1
-
-# Enable the community add-on repository
-microk8s enable community
 
 # Enable helm
 microk8s enable helm
@@ -72,14 +84,61 @@ chmod go-r ~/.kube/config
 # correct pod...
 # 10.0.0.23/32 will give me a single address (remember to exclude this from DHCP!).
 #
-# Don't forget to port-forward 80,443 to the IP address of the kourier LoadBalancer.
+# Don't forget to port-forward 80,443 to the IP address of the Istio Gateway.
 microk8s enable metallb:10.0.0.23/32
 
-# Install knative on the cluster
-echo 'N;' | microk8s.enable knative
+# Install knative operator
+kubectl apply -f https://github.com/knative/operator/releases/download/knative-v1.13.3/operator.yaml
 
-# check status of knative pods
-kubectl get pods -n knative-serving
+# Check the status of knative operator
+kubectl get deployment knative-operator
+
+# Install knative serving
+# NOTE: Replace the domain with your actual domain for the knative mesh
+cat <<EOF | kubectl create -f -
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: knative-serving
+---
+apiVersion: operator.knative.dev/v1beta1
+kind: KnativeServing
+metadata:
+  name: knative-serving
+  namespace: knative-serving
+spec:
+  config:
+    domain:
+      "knative.example.com": ""
+EOF
+
+# Check the status of knative serving
+kubectl get deployment -n knative-serving
+
+# If the READY status is True, you can continue
+kubectl get KnativeServing knative-serving -n knative-serving
+
+# Enable mTLS on the knative-serving namespace
+# This will automatically add mutual TLS to all
+# pods running in the namespace; neat!
+kubectl label namespace knative-serving istio-injection=enabled
+
+# Knative serving requires that we allow both mTLS and plaintext
+# Source: https://knative.dev/docs/install/installing-istio/#using-istio-mtls-feature-with-knative
+# Source: https://istio.io/latest/docs/reference/config/security/peer_authentication/
+cat <<EOF | kubectl create -f -
+apiVersion: "security.istio.io/v1beta1"
+kind: "PeerAuthentication"
+metadata:
+  name: "default"
+  namespace: "knative-serving"
+spec:
+  mtls:
+    mode: PERMISSIVE
+EOF
+
+# Verify that istio is installed correctly
+istioctl verify-install
 ```
 
 ## Installing cert-manager
@@ -99,7 +158,6 @@ a unique certificate, as only the DNS-01 challenge supports wildcard certificate
 # Source: https://knative.dev/docs/serving/encryption/enabling-automatic-tls-certificate-provisioning/#creating-a-clusterissuer
 
 # NOTE: Modify the below command with a real email address
-
 cat <<EOF | kubectl create -f -
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -115,7 +173,7 @@ spec:
     solvers:
     - http01:
        ingress:
-         class: kourier.ingress.networking.knative.dev
+         class: istio
 EOF
 
 # You can check the status if you want to:
@@ -143,24 +201,6 @@ kubectl patch configmap config-network \
     -n knative-serving \
     --type merge \
     -p '{"data": {"auto-tls": "Enabled", "external-domain-tls": "Enabled", "http-protocol": "Enabled"}}'
-
-# Set the default domain name, you can set other domain names based on selectors
-# Source: https://knative.dev/docs/serving/using-a-custom-domain/
-
-# NOTE: Modify the below command with a real DNS name
-
-kubectl patch configmap config-domain \
-    -n knative-serving \
-    --type merge \
-    -p '{"data": {"example.no": ""}}'
-```
-
-### Restart the VM for good measure
-
-It's a good idea to restart the server at this point.
-
-```sh
-sudo shutdown -r 0
 ```
 
 ### Verifying that the TLS setup works
@@ -168,12 +208,12 @@ sudo shutdown -r 0
 Before we continue, we should check to see that the entire certificate workflow works:
 
 ```sh
-# First make sure that kourier has been assigned an IP.
+# First make sure that istio has been assigned an IP.
 # It should not say <pending> under EXTERNAL-IP, if it does
 # then MetalLB has not been enabled/configured correctly.
 #
 # NOTE: Don't forget to port-forward 80,443 to this IP address.
-kubectl get service -n knative-serving kourier
+kubectl get service -n istio-system istio-ingressgateway
 
 # Deploy an example knative service
 kubectl apply -f https://raw.githubusercontent.com/knative/docs/main/docs/serving/autoscaling/autoscale-go/service.yaml
@@ -205,7 +245,55 @@ helm repo add strimzi https://strimzi.io/charts/
 helm install strimzi-operator strimzi/strimzi-kafka-operator \
   --namespace kafka \
   --create-namespace
+  
+# Disable sidecar on kafka namespace
+# Kafka terminates TLS on its own, and mTLS would result in errors.
+# When Istio sidecar is disabled, it's basically just a regular
+# ingress gateway (like NGINX) without all the extras that Istio provides.
+kubectl label namespace kafka istio-injection=disabled
 
 # TODO: Add steps to create a kafka cluster
 # Source: https://strimzi.io/quickstarts/
+```
+
+### Creating a certificate for Kafka brokers
+
+We need a certificate that the kafka brokers can use.
+
+NOTE: Modify the spec below to suit your domain and subject information.
+```sh
+# Source: https://cert-manager.io/v1.1-docs/usage/certificate/
+# Specification: https://cert-manager.io/docs/reference/api-docs/#cert-manager.io/v1.CertificateSpec
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kafka-example-com
+  namespace: kafka
+spec:
+  # Secret names are always required.
+  secretName: kafka-example-com-tls
+  duration: 2160h # 90d
+  renewBefore: 720h # 30d
+  # You should fill out the subject with as much information as possible
+  subject:
+    organizations:
+    - example
+  isCA: false
+  privateKey:
+    algorithm: ECDSA
+    size: 384
+  usages:
+    - server auth
+    - client auth
+  # Here, we'll just use the same certificate for all of our nodes
+  # They will live on separate subdomains (routed through NGINX Ingress Controller)
+  # So, list them out here:
+  dnsNames:
+  - kafka-1.example.com
+  - kafka-2.example.com
+  - kafka-3.example.com
+  # We'll use the ClusterIssuer that we created earlier
+  issuerRef:
+    name: letsencrypt-http01-issuer
+    kind: ClusterIssuer
 ```

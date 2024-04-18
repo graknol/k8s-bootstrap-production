@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kafka
+---
+# Source: https://cert-manager.io/v1.1-docs/usage/certificate/
+# Specification: https://cert-manager.io/docs/reference/api-docs/#cert-manager.io/v1.CertificateSpec
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kafka-example-com
+  namespace: kafka
+spec:
+  # Secret names are always required.
+  secretName: kafka-example-com-tls
+  duration: 2160h # 90d
+  renewBefore: 720h # 30d
+  # You should fill out the subject with as much information as possible
+  subject:
+    organizations:
+    - example
+  isCA: false
+  privateKey:
+    algorithm: ECDSA
+    size: 384
+  usages:
+    - server auth
+    - client auth
+  # Here, we'll just use the same certificate for all of our nodes
+  # They will live on separate subdomains (routed through NGINX Ingress Controller)
+  # So, list them out here:
+  dnsNames:
+  - kafka-1.example.com
+  - kafka-2.example.com
+  - kafka-3.example.com
+  # We'll use the ClusterIssuer that we created earlier
+  issuerRef:
+    name: letsencrypt-http01-issuer
+    kind: ClusterIssuer
