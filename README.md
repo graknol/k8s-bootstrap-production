@@ -57,19 +57,7 @@ chmod go-r ~/.kube/config
 
 ## Configuring Azure AD for RBAC
 
-If you want to login with Azure AD, you have to follow this guide:
-[Using Azure AD to Authenticate to Kubernetes](https://medium.com/@olemarkus/using-azure-ad-to-authenticate-to-kubernetes-eb143d3cce10)
-
-To configure the API server in microk8s, follow this guide: [Configure OIDC for a MicroK8s cluster](https://microk8s.io/docs/oidc-dex)
-
-**TL;DR**
-
-- Create an Azure AD App Registration for the API server
-- Create an Azure AD App Registration for kubectl
-- Configure the API server to use OIDC (the first app reg.)
-- Configure kubectl to trust the cluster CA, and use OIDC (the second app reg.)
-- Bind the user to roles
-  - I highly recommend managing this through GitOps, as everything is just YAML
+[Dex](https://github.com/dexidp/dex), no questions.
 
 ## Installing Istio
 
